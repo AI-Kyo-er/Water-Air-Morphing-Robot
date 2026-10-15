@@ -1,0 +1,45 @@
+# =====================================================================
+# 潜空跨介质 —— INAV 7.1.2 水下运控模态 CLI 配置模板
+#
+# 用法：飞控连接后在 CLI 中逐行粘贴，或保存为脚本由 Configurator 载入。
+# 数值为开发阶段参考值，需按实际遥控器/接线/舵机中位标定后更新。
+# =====================================================================
+
+# ---- 1. 把 UNDERWATER 模式(permanentId=65)分配到 AUX2 的三段开关中段 ----
+# aux <slot> <permanentId> <start> <end> <channelIndex> <logic>
+#
+# 空中 = AUX2 高位，水下 = AUX2 低位；此处给出二段示例（按需改为三段）。
+aux 4 65 1300 1700 1 0
+
+# ---- 2. 打开 SBUS 舵机输出串口，把倾转角下发给 ESP32/舵机 ----
+# serial <index> <functionMask> <mspBaud> <gpsBaud> <telemetryBaud> <blackboxBaud>
+serial 5 32768 115200 57600 25000 1
+
+# ---- 3. 双套 PID 增益（初值，与 underwater_config.c 保持一致）----
+# 空中 profile：P/I/D 面向空气动力学；
+# 水下 profile：更低的 P/D，匹配附加质量与阻尼（由模态监督器在线切换）。
+profile 0
+set p_pitch = 45
+set i_pitch = 30
+set d_pitch = 20
+set p_roll = 45
+set i_roll = 30
+set d_roll = 20
+set p_yaw = 45
+set i_yaw = 45
+set d_yaw = 0
+
+profile 1
+set p_pitch = 30
+set i_pitch = 25
+set d_pitch = 10
+set p_roll = 30
+set i_roll = 25
+set d_roll = 10
+set p_yaw = 35
+set i_yaw = 35
+set d_yaw = 0
+profile 0
+
+# ---- 4. 保存 ----
+save

@@ -1,0 +1,16 @@
+# 算法研究参数；物理参数仍由 vehicle_default.yaml 管理。
+allocation:
+  force_scale_n: 12.0
+  torque_scale_nm: 1.0
+  axis_priority: [1.0, 0.0, 3.0, 3.0, 3.0, 1.5]
+  thrust_rate_n_s: 80.0
+  smoothness: 0.002
+  max_iterations: 5
+  independent_tilt: true
+  enforce_rates: true
+benchmark:
+  seeds: [11, 23, 37, 53, 71]
+  dt_s: 0.04
+  duration_s: 12.0
+  initial_thrust_n: 2.5
+  cases: [nominal, yaw_maneuver, thrust_loss, fast_command, medium_transition]

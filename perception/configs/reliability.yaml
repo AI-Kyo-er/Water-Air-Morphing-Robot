@@ -1,0 +1,27 @@
+fusion:
+  prior: 0.25
+  declare_on: 0.78
+  declare_off: 0.35
+  dwell_s: 0.4
+  max_age_s: 0.6
+  llr_clip: 8.0
+  correlation_discount: 0.5
+  min_std: 0.1
+benchmark:
+  calibration_seed: 101
+  calibration_samples: 800
+  evaluation_seeds: [211, 223, 227, 229, 233]
+  dt_s: 0.1
+  duration_s: 60.0
+  modalities: [acoustic, magnetic, vision, sonar]
+  score_background_mean: 0.0
+  score_target_mean: 2.4
+  score_std: 0.8
+  target_intervals_s: [[10, 24], [36, 50]]
+  acoustic_interference_s: [25, 35]
+  interference_score: 4.2
+  interference_std: 1.8
+  degraded_quality: 0.08
+  missing_vision_s: [12, 23]
+  stale_sonar_s: [38, 47]
+  common_noise_std: 0.2

@@ -1,0 +1,979 @@
+diff --git a/src/main/CMakeLists.txt b/src/main/CMakeLists.txt
+index 7f076b5..367ffa3 100644
+--- a/src/main/CMakeLists.txt
++++ b/src/main/CMakeLists.txt
+@@ -421,6 +421,15 @@ main_sources(COMMON_SRC
+     rx/sim.c
+     rx/sim.h
+ 
++    underwater/underwater.c
++    underwater/underwater.h
++    underwater/underwater_allocator.c
++    underwater/underwater_allocator.h
++    underwater/underwater_mode.c
++    underwater/underwater_mode.h
++    underwater/underwater_config.c
++    underwater/underwater_params.h
++
+ 
+     scheduler/scheduler.c
+     scheduler/scheduler.h
+diff --git a/src/main/fc/fc_core.c b/src/main/fc/fc_core.c
+index 0d08637..ff50ee5 100644
+--- a/src/main/fc/fc_core.c
++++ b/src/main/fc/fc_core.c
+@@ -88,6 +88,8 @@
+ #include "flight/imu.h"
+ #include "flight/rate_dynamics.h"
+ 
++#include "underwater/underwater.h"
++
+ #include "flight/failsafe.h"
+ #include "flight/power_limits.h"
+ 
+@@ -663,6 +665,7 @@ void processRx(timeUs_t currentTimeUs)
+     processRcStickPositions(throttleIsLow);
+     processAirmode();
+     updateActivatedModes();
++    underwaterUpdateMode();
+ 
+ #ifdef USE_PINIOBOX
+     pinioBoxUpdate();
+@@ -943,6 +946,7 @@ void taskMainPidLoop(timeUs_t currentTimeUs)
+     pidController(dT);
+ 
+     mixTable();
++    underwaterMixUpdate();
+ 
+     if (isMixerUsingServos()) {
+         servoMixer(dT);
+diff --git a/src/main/fc/fc_msp_box.c b/src/main/fc/fc_msp_box.c
+index f1c7245..a9a0b8e 100644
+--- a/src/main/fc/fc_msp_box.c
++++ b/src/main/fc/fc_msp_box.c
+@@ -103,6 +103,7 @@ static const box_t boxes[CHECKBOX_ITEM_COUNT + 1] = {
+     { .boxId = BOXMIXERPROFILE,     .boxName = "MIXER PROFILE 2",   .permanentId = 62 },
+     { .boxId = BOXMIXERTRANSITION,  .boxName = "MIXER TRANSITION",  .permanentId = 63 },
+     { .boxId = BOXANGLEHOLD,        .boxName = "ANGLE HOLD",        .permanentId = 64 },
++    { .boxId = BOXUNDERWATER,       .boxName = "UNDERWATER",        .permanentId = 65 },
+     { .boxId = CHECKBOX_ITEM_COUNT, .boxName = NULL,                .permanentId = 0xFF }
+ };
+ 
+diff --git a/src/main/fc/rc_modes.h b/src/main/fc/rc_modes.h
+index fa1827a..6e68e9c 100644
+--- a/src/main/fc/rc_modes.h
++++ b/src/main/fc/rc_modes.h
+@@ -82,6 +82,7 @@ typedef enum {
+     BOXMIXERPROFILE      = 53,
+     BOXMIXERTRANSITION   = 54,
+     BOXANGLEHOLD     = 55,
++    BOXUNDERWATER    = 56,   // 娼滅┖璺ㄤ粙璐細姘翠笅杩愭帶妯℃€佸紑鍏?     CHECKBOX_ITEM_COUNT
+ } boxId_e;
+ 
+diff --git a/src/main/fc/runtime_config.h b/src/main/fc/runtime_config.h
+index 8772c09..2bf2f53 100644
+--- a/src/main/fc/runtime_config.h
++++ b/src/main/fc/runtime_config.h
+@@ -106,6 +106,7 @@ typedef enum {
+     SOARING_MODE          = (1 << 16),
+     ANGLEHOLD_MODE        = (1 << 17),
+     NAV_FW_AUTOLAND       = (1 << 18),
++    UNDERWATER_MODE       = (1 << 19),  // 娼滅┖璺ㄤ粙璐細褰撳墠澶勪簬姘翠笅杩愭帶妯℃€? } flightModeFlags_e;
+ 
+ extern uint32_t flightModeFlags;
+diff --git a/src/main/underwater/underwater.c b/src/main/underwater/underwater.c
+new file mode 100644
+index 0000000..25b5f63
+--- /dev/null
++++ b/src/main/underwater/underwater.c
+@@ -0,0 +1,118 @@
++/*
++ * underwater.c 鈥斺€?INAV 闆嗘垚灞傚疄鐜帮紙姘翠笅杩愭帶妯℃€侊級
++ *
++ * 璇存槑锛氭湰鏂囦欢渚濊禆 INAV 7.1.2 鐨勬棦鏈夋帴鍙ｏ紙rc_modes / runtime_config / pid /
++ * servo_sbus / rx锛夈€傜函绠楁硶閫昏緫浣嶄簬鍚岀洰褰曞墠涓変釜鏂囦欢鍚嶄腑锛屽彲鐙珛鍦ㄤ富鏈轰笂娴嬭瘯銆?+ */
++#include "platform.h"
++
++#include "build/build_config.h"
++
++#include "common/maths.h"
++#include "common/time.h"
++
++#include "fc/config.h"
++#include "fc/rc_controls.h"
++#include "fc/rc_modes.h"
++#include "fc/runtime_config.h"
++
++#include "flight/pid.h"
++
++#include "io/servo_sbus.h"
++
++#include "rx/rx.h"
++
++#include "underwater/underwater.h"
++#include "underwater/underwater_allocator.h"
++#include "underwater/underwater_mode.h"
++#include "underwater/underwater_params.h"
++
++/*---- 闈欐€佺姸鎬?---------------------------------------------------------*/
++static uw_supervisor_t uwSupervisor;
++static uw_allocator_t uwAllocator;
++static bool uwInitialized = false;
++
++/* PID 涓诲惊鐜懆鏈燂紙250 Hz锛夈€?*/
++#define UW_LOOP_DT_S 0.004f
++
++/* SBUS 鍊捐浆閫氶亾璧峰搴忓彿锛堝搴?ESP32 渚у€捐浆璇诲彇閫氶亾锛夈€?*/
++#define UW_SBUS_TILT_BASE 6
++
++/* 鎶婂€捐浆瑙掞紙寮у害锛夌嚎鎬ф槧灏勫埌 1000..2000 us锛岄浂鐐?1500 us銆?*/
++static uint16_t uwTiltToPulse(float theta)
++{
++    const float pulse = 1500.0f + theta * (180.0f / (float)M_PI) * (100.0f / 9.0f);
++    return (uint16_t)constrainf(pulse, 1000.0f, 2000.0f);
++}
++
++static void uwEnsureInit(void)
++{
++    if (uwInitialized) {
++        return;
++    }
++    uw_supervisor_init(&uwSupervisor, &uw_default_gain_table,
++                       2.0f, uw_vehicle_default.tilt_rate_limit);
++    uw_allocator_init(&uwAllocator, &uw_vehicle_default);
++    uwInitialized = true;
++}
++
++/* 鎶婅瀺鍚堝悗鐨勫鐩婂啓鍏ュ綋鍓?PID profile锛涘弻濂楀鐩婂叡浜悓涓€璋冨弬鍙ｅ緞銆?*/
++static void uwApplyGains(const uw_pid_gains_t *gains)
++{
++    pidProfileMutable()->pid[PID_ROLL].P = (uint16_t)gains->p[0];
++    pidProfileMutable()->pid[PID_ROLL].I = (uint16_t)gains->i[0];
++    pidProfileMutable()->pid[PID_ROLL].D = (uint16_t)gains->d[0];
++    pidProfileMutable()->pid[PID_PITCH].P = (uint16_t)gains->p[1];
++    pidProfileMutable()->pid[PID_PITCH].I = (uint16_t)gains->i[1];
++    pidProfileMutable()->pid[PID_PITCH].D = (uint16_t)gains->d[1];
++    pidProfileMutable()->pid[PID_YAW].P = (uint16_t)gains->p[2];
++    pidProfileMutable()->pid[PID_YAW].I = (uint16_t)gains->i[2];
++    pidProfileMutable()->pid[PID_YAW].D = (uint16_t)gains->d[2];
++}
++
++void underwaterUpdateMode(void)
++{
++    uwEnsureInit();
++
++    const uw_medium_t commanded = IS_RC_MODE_ACTIVE(BOXUNDERWATER) ? UW_MEDIUM_WATER
++                                                                   : UW_MEDIUM_AIR;
++    if (uw_supervisor_update(&uwSupervisor, commanded, millis())) {
++        /* 浠嬭川鍒囨崲锛氱疆/娓呴琛屾ā寮忔爣蹇楋紝渚?OSD銆佹贩鎺т笌鏃ュ織浣跨敤 */
++        if (commanded == UW_MEDIUM_WATER) {
++            ENABLE_FLIGHT_MODE(UNDERWATER_MODE);
++        } else {
++            DISABLE_FLIGHT_MODE(UNDERWATER_MODE);
++        }
++    }
++
++    uwApplyGains(uw_supervisor_gains(&uwSupervisor));
++}
++
++void underwaterMixUpdate(void)
++{
++    if (!uwInitialized || !FLIGHT_MODE(UNDERWATER_MODE)) {
++        return;
++    }
++
++    const float dt = UW_LOOP_DT_S;
++
++    /* 鐢遍仴鎺ф剰鍥炬瀯閫犳湡鏈涘箍涔夊姏锛堟墜鍔?澧炵ǔ妯″紡锛夛紱
++     * 鍏ㄨ嚜涓绘ā寮忎笅搴旂敱浣嶇疆/濮挎€佹帶鍒跺櫒杈撳嚭鐨勫箍涔夊姏鏇夸唬姝ゅ銆?*/
++    const float forward = (float)rcCommand[PITCH] / 500.0f * uw_vehicle_default.force_scale_n;
++    const float vertical = 2.0f * (float)rcCommand[THROTTLE] / 1000.0f * uw_vehicle_default.thrust_max_water;
++    const float roll_torque = (float)rcCommand[ROLL] / 500.0f * uw_vehicle_default.torque_scale_nm;
++    const float target[UW_NUM_WRENCH] = {
++        forward, 0.0f, vertical, roll_torque, 0.0f, 0.0f
++    };
++
++    uw_allocation_t result;
++    uw_allocate(&uwAllocator, target, UW_MEDIUM_WATER, dt, NULL,
++                uw_supervisor_air_fraction(&uwSupervisor), &result);
++
++    /* 鍊捐浆瑙掗檺閫熷悗涓嬪彂鍒?SBUS 鑸垫満閫氶亾锛屼繚鎸佷粙璐ㄥ垏鎹㈡寚浠よ繛缁?*/
++    float tiltOut[UW_NUM_ROTORS];
++    uw_supervisor_slew_tilt(&uwSupervisor, result.command + 4, dt, tiltOut);
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        sbusServoUpdate(UW_SBUS_TILT_BASE + i, uwTiltToPulse(tiltOut[i]));
++    }
++}
+diff --git a/src/main/underwater/underwater.h b/src/main/underwater/underwater.h
+new file mode 100644
+index 0000000..9db2d0d
+--- /dev/null
++++ b/src/main/underwater/underwater.h
+@@ -0,0 +1,14 @@
++/*
++ * underwater.h 鈥斺€?INAV 闆嗘垚灞傛帴鍙?+ *
++ * 璇ュ眰鎶婄函绠楁硶妯″潡锛坲nderwater_allocator / underwater_mode锛夋帴鍏?INAV 涓诲惊鐜細
++ *   - underwaterUpdateMode()锛氳鍙?BOXUNDERWATER锛岀淮鎶ゆā寮忔爣蹇椾笌鍙屽 PID 澧炵泭锛?+ *   - underwaterMixUpdate() 锛氬湪姘翠腑妯℃€佷笅杩愯绾︽潫鍒嗛厤骞舵妸鍊捐浆瑙掍笅鍙戝埌 SBUS 鑸垫満銆?+ */
++#pragma once
++
++/* 鍦ㄩ仴鎺?妯″紡鏇存柊涔嬪悗璋冪敤锛坒c_core.c processRx锛夈€?*/
++void underwaterUpdateMode(void);
++
++/* 鍦ㄦ贩鎺т箣鍚庤皟鐢紙fc_core.c taskMainPidLoop锛夈€?*/
++void underwaterMixUpdate(void);
+diff --git a/src/main/underwater/underwater_allocator.c b/src/main/underwater/underwater_allocator.c
+new file mode 100644
+index 0000000..96e13b6
+--- /dev/null
++++ b/src/main/underwater/underwater_allocator.c
+@@ -0,0 +1,436 @@
++/*
++ * underwater_allocator.c 鈥斺€?閫愭绾挎€у寲 + 鏈夌晫鏈€灏忎簩涔樻帶鍒跺垎閰嶅疄鐜?+ *
++ * 鍙傝€?control/cm_uav/{geometry,constrained_allocation}.py 鐨勫叕寮忥紝鍙娇鐢?+ * float / 瀹氱偣鍙嬪ソ鐨勮繍绠楋紝鍙湪椋炴帶 MCU 涓婁互鍥哄畾鍛ㄦ湡杩愯銆?+ */
++#include "underwater_allocator.h"
++
++#include <math.h>
++#include <string.h>
++
++#define UW_EPS 1e-9f
++
++static const float UW_Z_HAT[3] = {0.0f, 0.0f, 1.0f};
++
++static float uw_clampf(float v, float lo, float hi)
++{
++    return v < lo ? lo : (v > hi ? hi : v);
++}
++
++static void uw_cross(const float a[3], const float b[3], float out[3])
++{
++    out[0] = a[1] * b[2] - a[2] * b[1];
++    out[1] = a[2] * b[0] - a[0] * b[2];
++    out[2] = a[0] * b[1] - a[1] * b[0];
++}
++
++/* 鎺ㄥ姏鏂瑰悜 n_i(theta) = cos(theta) z + sin(theta) d_i */
++static void uw_thrust_direction(const uw_vehicle_t *v, int i, float theta, float n[3])
++{
++    const float c = cosf(theta);
++    const float s = sinf(theta);
++    for (int k = 0; k < 3; ++k) {
++        n[k] = c * UW_Z_HAT[k] + s * v->tilt_directions[i][k];
++    }
++}
++
++/* 鏂瑰悜瀵瑰€捐浆瑙掔殑瀵兼暟 dn_i/dtheta */
++static void uw_thrust_direction_deriv(const uw_vehicle_t *v, int i, float theta, float dn[3])
++{
++    const float c = cosf(theta);
++    const float s = sinf(theta);
++    for (int k = 0; k < 3; ++k) {
++        dn[k] = -s * UW_Z_HAT[k] + c * v->tilt_directions[i][k];
++    }
++}
++
++/* 鐢辨帹鍔?鍊捐浆瑙?鏁堣兘璁＄畻鏈轰綋绯诲悎鍔涗笌鍚堝姏鐭┿€?*/
++static void uw_body_wrench(const uw_vehicle_t *v, const float T[UW_NUM_ROTORS],
++                           const float theta[UW_NUM_ROTORS], const float health[UW_NUM_ROTORS],
++                           float out[UW_NUM_WRENCH])
++{
++    float force[3] = {0.0f, 0.0f, 0.0f};
++    float torque[3] = {0.0f, 0.0f, 0.0f};
++
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        float n[3], ti[3], moment[3];
++        const float thrust = T[i] * health[i];
++        uw_thrust_direction(v, i, theta[i], n);
++        for (int k = 0; k < 3; ++k) {
++            ti[k] = thrust * n[k];
++            force[k] += ti[k];
++        }
++        uw_cross(v->positions[i], ti, moment);
++        const float reaction = v->spin_signs[i] * v->reaction_torque_coeff * thrust;
++        for (int k = 0; k < 3; ++k) {
++            torque[k] += moment[k] + reaction * n[k];
++        }
++    }
++    for (int k = 0; k < 3; ++k) {
++        out[k] = force[k];
++        out[3 + k] = torque[k];
++    }
++}
++
++/* 鎺у埗鏁堢巼鐭╅樀 B = d(wrench)/du锛?6,8)锛屽垪 0..3 宸插惈鏁堣兘銆?*/
++static void uw_effectiveness(const uw_vehicle_t *v, const float T[UW_NUM_ROTORS],
++                             const float theta[UW_NUM_ROTORS], const float health[UW_NUM_ROTORS],
++                             float B[UW_NUM_WRENCH][UW_NUM_ACTUATORS])
++{
++    memset(B, 0, sizeof(float) * UW_NUM_WRENCH * UW_NUM_ACTUATORS);
++
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        float n[3], dn[3], col[3], dcol[3];
++        const float thrust = T[i] * health[i];
++        uw_thrust_direction(v, i, theta[i], n);
++        uw_thrust_direction_deriv(v, i, theta[i], dn);
++
++        /* 瀵规帹鍔涚殑鍋忓 */
++        uw_cross(v->positions[i], n, col);
++        for (int k = 0; k < 3; ++k) {
++            B[k][i] = n[k] * health[i];
++            B[3 + k][i] = (col[k] + v->spin_signs[i] * v->reaction_torque_coeff * n[k]) * health[i];
++        }
++
++        /* 瀵瑰€捐浆瑙掔殑鍋忓 */
++        uw_cross(v->positions[i], dn, dcol);
++        for (int k = 0; k < 3; ++k) {
++            B[k][4 + i] = thrust * dn[k];
++            B[3 + k][4 + i] = thrust * (dcol[k] + v->spin_signs[i] * v->reaction_torque_coeff * dn[k]);
++        }
++    }
++}
++
++/* 6x8 鐭╅樀鐨勬暟鍊肩З锛堥珮鏂秷鍏?+ 閮ㄥ垎涓诲厓锛夈€?*/
++static int uw_matrix_rank(const float B[UW_NUM_WRENCH][UW_NUM_ACTUATORS])
++{
++    float m[UW_NUM_WRENCH][UW_NUM_ACTUATORS];
++    memcpy(m, B, sizeof(m));
++
++    float scale = 0.0f;
++    for (int r = 0; r < UW_NUM_WRENCH; ++r) {
++        for (int c = 0; c < UW_NUM_ACTUATORS; ++c) {
++            const float a = fabsf(m[r][c]);
++            if (a > scale) {
++                scale = a;
++            }
++        }
++    }
++    const float tol = 1e-6f * (scale > 0.0f ? scale : 1.0f);
++
++    int rank = 0;
++    for (int c = 0; c < UW_NUM_ACTUATORS && rank < UW_NUM_WRENCH; ++c) {
++        int pivot = -1;
++        float best = tol;
++        for (int r = rank; r < UW_NUM_WRENCH; ++r) {
++            const float a = fabsf(m[r][c]);
++            if (a > best) {
++                best = a;
++                pivot = r;
++            }
++        }
++        if (pivot < 0) {
++            continue;
++        }
++        if (pivot != rank) {
++            for (int k = 0; k < UW_NUM_ACTUATORS; ++k) {
++                const float tmp = m[rank][k];
++                m[rank][k] = m[pivot][k];
++                m[pivot][k] = tmp;
++            }
++        }
++        const float inv = 1.0f / m[rank][c];
++        for (int r = 0; r < UW_NUM_WRENCH; ++r) {
++            if (r == rank) {
++                continue;
++            }
++            const float factor = m[r][c] * inv;
++            if (factor == 0.0f) {
++                continue;
++            }
++            for (int k = c; k < UW_NUM_ACTUATORS; ++k) {
++                m[r][k] -= factor * m[rank][k];
++            }
++        }
++        ++rank;
++    }
++    return rank;
++}
++
++/* 姝ｈ鏂圭▼姹傝В锛欰 x = b锛?x8锛岄儴鍒嗕富鍏冮珮鏂?绾﹀綋锛夈€傚寮傛椂杩斿洖 -1銆?*/
++static int uw_solve8(float A[UW_NUM_ACTUATORS][UW_NUM_ACTUATORS],
++                     const float b[UW_NUM_ACTUATORS], float x[UW_NUM_ACTUATORS])
++{
++    float aug[UW_NUM_ACTUATORS][UW_NUM_ACTUATORS + 1];
++    for (int r = 0; r < UW_NUM_ACTUATORS; ++r) {
++        for (int c = 0; c < UW_NUM_ACTUATORS; ++c) {
++            aug[r][c] = A[r][c];
++        }
++        aug[r][UW_NUM_ACTUATORS] = b[r];
++    }
++
++    for (int c = 0; c < UW_NUM_ACTUATORS; ++c) {
++        int pivot = c;
++        for (int r = c + 1; r < UW_NUM_ACTUATORS; ++r) {
++            if (fabsf(aug[r][c]) > fabsf(aug[pivot][c])) {
++                pivot = r;
++            }
++        }
++        if (fabsf(aug[pivot][c]) < 1e-12f) {
++            return -1;
++        }
++        if (pivot != c) {
++            for (int k = c; k <= UW_NUM_ACTUATORS; ++k) {
++                const float tmp = aug[c][k];
++                aug[c][k] = aug[pivot][k];
++                aug[pivot][k] = tmp;
++            }
++        }
++        const float inv = 1.0f / aug[c][c];
++        for (int k = c; k <= UW_NUM_ACTUATORS; ++k) {
++            aug[c][k] *= inv;
++        }
++        for (int r = 0; r < UW_NUM_ACTUATORS; ++r) {
++            if (r == c) {
++                continue;
++            }
++            const float factor = aug[r][c];
++            if (factor == 0.0f) {
++                continue;
++            }
++            for (int k = c; k <= UW_NUM_ACTUATORS; ++k) {
++                aug[r][k] -= factor * aug[c][k];
++            }
++        }
++    }
++
++    for (int r = 0; r < UW_NUM_ACTUATORS; ++r) {
++        x[r] = aug[r][UW_NUM_ACTUATORS];
++    }
++    return 0;
++}
++
++void uw_allocator_init(uw_allocator_t *a, const uw_vehicle_t *vehicle)
++{
++    a->vehicle = vehicle;
++    uw_allocator_reset(a);
++}
++
++void uw_allocator_reset(uw_allocator_t *a)
++{
++    memset(a->previous, 0, sizeof(a->previous));
++    a->has_previous = 0;
++}
++
++void uw_allocate(uw_allocator_t *a, const float target[UW_NUM_WRENCH],
++                 uw_medium_t medium, float dt, const float health_in[UW_NUM_ROTORS],
++                 float air_fraction, uw_allocation_t *out)
++{
++    const uw_vehicle_t *v = a->vehicle;
++
++    float health[UW_NUM_ROTORS];
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        health[i] = health_in ? uw_clampf(health_in[i], 0.0f, 1.0f) : 1.0f;
++    }
++    if (dt <= 0.0f) {
++        dt = 1e-3f;
++    }
++    air_fraction = uw_clampf(air_fraction, 0.0f, 1.0f);
++
++    const float thrust_max = (medium == UW_MEDIUM_AIR) ? v->thrust_max_air : v->thrust_max_water;
++
++    /* ---- 1. 鍙揪鍖洪棿锛氱墿鐞嗚竟鐣?+ 鍙樺寲鐜?+ 绌轰腑鎺堟潈鍥炰腑 ---- */
++    float low[UW_NUM_ACTUATORS], high[UW_NUM_ACTUATORS];
++    float physical_low[UW_NUM_ACTUATORS], physical_high[UW_NUM_ACTUATORS];
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        physical_low[i] = 0.0f;
++        physical_high[i] = thrust_max;
++        physical_low[4 + i] = -v->tilt_limit;
++        physical_high[4 + i] = v->tilt_limit;
++    }
++    float previous[UW_NUM_ACTUATORS];
++    for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++        previous[j] = a->has_previous ? uw_clampf(a->previous[j], physical_low[j], physical_high[j])
++                                      : uw_clampf(0.0f, physical_low[j], physical_high[j]);
++    }
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        const float thrust_step = v->thrust_rate_n_s * dt;
++        const float tilt_step = v->tilt_rate_limit * dt;
++        low[i] = fmaxf(physical_low[i], previous[i] - thrust_step);
++        high[i] = fminf(physical_high[i], previous[i] + thrust_step);
++        low[4 + i] = fmaxf(physical_low[4 + i], previous[4 + i] - tilt_step);
++        high[4 + i] = fminf(physical_high[4 + i], previous[4 + i] + tilt_step);
++    }
++    if (air_fraction >= 0.999f) {
++        for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++            const float centered = uw_clampf(0.0f, low[4 + i], high[4 + i]);
++            low[4 + i] = centered;
++            high[4 + i] = centered;
++        }
++    }
++
++    float anchor[UW_NUM_ACTUATORS];
++    float u[UW_NUM_ACTUATORS];
++    for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++        anchor[j] = previous[j];
++        u[j] = uw_clampf(anchor[j], low[j], high[j]);
++    }
++
++    /* ---- 2. 褰掍竴鍖栨潈閲嶄笌骞虫粦鎯╃綒 ---- */
++    float scale6[UW_NUM_WRENCH];
++    for (int k = 0; k < 3; ++k) {
++        scale6[k] = v->force_scale_n;
++        scale6[3 + k] = v->torque_scale_nm;
++    }
++    float weights[UW_NUM_WRENCH];
++    for (int k = 0; k < UW_NUM_WRENCH; ++k) {
++        weights[k] = v->axis_priority[k] / scale6[k];
++    }
++    float penalty[UW_NUM_ACTUATORS];
++    const float sqrt_smooth = sqrtf(v->smoothness);
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        penalty[i] = sqrt_smooth / thrust_max;
++        penalty[4 + i] = sqrt_smooth / v->tilt_limit;
++    }
++
++    /* ---- 3. 閫愭绾挎€у寲 ---- */
++    float T[UW_NUM_ROTORS], theta[UW_NUM_ROTORS];
++    int iterations = 0;
++    for (iterations = 1; iterations <= v->max_iterations; ++iterations) {
++        for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++            T[i] = u[i];
++            theta[i] = u[4 + i];
++        }
++
++        float B[UW_NUM_WRENCH][UW_NUM_ACTUATORS];
++        float w0[UW_NUM_WRENCH];
++        uw_effectiveness(v, T, theta, health, B);
++        uw_body_wrench(v, T, theta, health, w0);
++
++        float A[UW_NUM_ACTUATORS][UW_NUM_ACTUATORS];
++        float rhs[UW_NUM_ACTUATORS];
++        for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++            rhs[j] = 0.0f;
++            for (int k = 0; k < UW_NUM_ACTUATORS; ++k) {
++                A[j][k] = 0.0f;
++            }
++        }
++        for (int r = 0; r < UW_NUM_WRENCH; ++r) {
++            const float bw = weights[r] * (target[r] - w0[r]);
++            for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++                const float jw = weights[r] * B[r][j];
++                rhs[j] += jw * bw;
++                for (int k = j; k < UW_NUM_ACTUATORS; ++k) {
++                    A[j][k] += jw * weights[r] * B[r][k];
++                }
++            }
++        }
++        for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++            for (int k = 0; k < j; ++k) {
++                A[j][k] = A[k][j];
++            }
++            A[j][j] += penalty[j] * penalty[j] + 1e-6f;
++            rhs[j] -= penalty[j] * penalty[j] * (u[j] - anchor[j]);
++        }
++
++        float step[UW_NUM_ACTUATORS];
++        if (uw_solve8(A, rhs, step) != 0) {
++            break;
++        }
++        for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++            step[j] = uw_clampf(step[j], low[j] - u[j], high[j] - u[j]);
++        }
++
++        /* 浠ｄ环锛氬姞鏉冨姏璇樊 + 骞虫粦姝ｅ垯 */
++        float old_cost = 0.0f;
++        float err[UW_NUM_WRENCH];
++        for (int r = 0; r < UW_NUM_WRENCH; ++r) {
++            err[r] = weights[r] * (w0[r] - target[r]);
++            old_cost += err[r] * err[r];
++        }
++        for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++            const float ch = penalty[j] * (u[j] - anchor[j]);
++            old_cost += ch * ch;
++        }
++
++        int accepted = 0;
++        static const float fractions[4] = {1.0f, 0.5f, 0.25f, 0.125f};
++        for (int f = 0; f < 4 && !accepted; ++f) {
++            float candidate[UW_NUM_ACTUATORS];
++            float Tt[UW_NUM_ROTORS], th[UW_NUM_ROTORS];
++            float wc[UW_NUM_WRENCH];
++            float cost = 0.0f;
++            for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++                candidate[j] = uw_clampf(u[j] + fractions[f] * step[j], low[j], high[j]);
++            }
++            for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++                Tt[i] = candidate[i];
++                th[i] = candidate[4 + i];
++            }
++            uw_body_wrench(v, Tt, th, health, wc);
++            for (int r = 0; r < UW_NUM_WRENCH; ++r) {
++                const float e = weights[r] * (wc[r] - target[r]);
++                cost += e * e;
++            }
++            for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++                const float ch = penalty[j] * (candidate[j] - anchor[j]);
++                cost += ch * ch;
++            }
++            if (cost < old_cost - 1e-12f) {
++                for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++                    u[j] = candidate[j];
++                }
++                accepted = 1;
++            }
++        }
++
++        float step_norm = 0.0f;
++        for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++            step_norm += step[j] * step[j];
++        }
++        if (!accepted || step_norm < 1e-14f) {
++            break;
++        }
++    }
++
++    /* ---- 4. 缁撴灉涓庤瘖鏂?---- */
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        T[i] = u[i];
++        theta[i] = u[4 + i];
++    }
++    float B[UW_NUM_WRENCH][UW_NUM_ACTUATORS];
++    uw_effectiveness(v, T, theta, health, B);
++    uw_body_wrench(v, T, theta, health, out->achieved_wrench);
++
++    float norm = 0.0f;
++    for (int r = 0; r < UW_NUM_WRENCH; ++r) {
++        out->residual[r] = target[r] - out->achieved_wrench[r];
++        const float e = weights[r] * out->residual[r];
++        norm += e * e;
++    }
++    out->normalized_error = sqrtf(norm);
++    out->local_rank = uw_matrix_rank(B);
++
++    int active = 0;
++    for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++        if (u[j] <= low[j] + 1e-6f || u[j] >= high[j] - 1e-6f) {
++            ++active;
++        }
++        out->command[j] = u[j];
++    }
++    out->active_bounds = active;
++    out->iterations = iterations > v->max_iterations ? v->max_iterations : iterations;
++
++    int projected = 0;
++    for (int j = 0; j < UW_NUM_ACTUATORS; ++j) {
++        if (fabsf(anchor[j] - previous[j]) > 1e-9f) {
++            projected = 1;
++            break;
++        }
++    }
++    out->forced_projection = projected;
++
++    memcpy(a->previous, u, sizeof(u));
++    a->has_previous = 1;
++}
+diff --git a/src/main/underwater/underwater_allocator.h b/src/main/underwater/underwater_allocator.h
+new file mode 100644
+index 0000000..204b098
+--- /dev/null
++++ b/src/main/underwater/underwater_allocator.h
+@@ -0,0 +1,48 @@
++/*
++ * underwater_allocator.h 鈥斺€?閫愭绾挎€у寲 + 鏈夌晫鏈€灏忎簩涔樼殑鑱斿悎鎺ㄥ姏/鍊捐浆瑙掑垎閰?+ *
++ * 涓?control/cm_uav/constrained_allocation.py 閲囩敤鍚屼竴妯″瀷涓庝唬浠凤細鎺у埗鏁堢巼鐭╅樀
++ * 鐢辨帹杩涘嚑浣曪紙geometry.py锛夊敮涓€纭畾锛屽垎閰嶅櫒鍦ㄤ换鍔¤酱鏉冮噸銆佷粙璐ㄦ帹鍔涜竟鐣屻€佹寚浠?+ * 骞呭€?鍙樺寲鐜囩害鏉熶笌宸茬煡鎺ㄥ姏鏁堣兘涓嬫眰瑙ｆ墽琛岄噺銆?+ *
++ * 璇ュ疄鐜板湪瀹氱偣鏈轰笂浠ャ€屽姞鏉冩瑙勬柟绋?+ 鎶曞奖鏈夌晫姝?+ 鍥炴函绾挎悳绱€嶈繎浼?Python 鐨?+ * 甯︾晫鏈€灏忎簩涔橈紙BVLS锛夛紝涓嶄緷璧?SVD / 鍔ㄦ€佸唴瀛樸€?+ */
++#pragma once
++
++#include "underwater_params.h"
++
++typedef struct uw_allocation_s {
++    float command[UW_NUM_ACTUATORS];      /* 瀹為檯鎸囦护 [T1..T4, th1..th4] */
++    float achieved_wrench[UW_NUM_WRENCH]; /* 妯″瀷瀹炵幇鐨勫箍涔夊姏 */
++    float residual[UW_NUM_WRENCH];        /* target - achieved */
++    float normalized_error;               /* 鍔犳潈娈嬪樊鑼冩暟 */
++    int local_rank;                        /* 灞€閮ㄦ晥鐜囩煩闃电З锛?=5锛?*/
++    int active_bounds;                     /* 瑙︾晫鐨勬墽琛岄噺涓暟 */
++    int iterations;                        /* 瀹為檯杩唬娆℃暟 */
++    int forced_projection;                 /* 鏈懆鏈熸槸鍚﹀洜杈圭晫鍙樺寲琚姇褰?*/
++} uw_allocation_t;
++
++typedef struct uw_allocator_s {
++    const uw_vehicle_t *vehicle;
++    float previous[UW_NUM_ACTUATORS];      /* 涓婂懆鏈熸寚浠?*/
++    int has_previous;
++} uw_allocator_t;
++
++void uw_allocator_init(uw_allocator_t *a, const uw_vehicle_t *vehicle);
++
++/* 娓呴浂鍘嗗彶鎸囦护锛岄噸鏂板洖鍒颁腑浣嶃€?*/
++void uw_allocator_reset(uw_allocator_t *a);
++
++/*
++ * 姹傝В鏈懆鏈熸墽琛岄噺銆?+ *   target       : 鏈熸湜骞夸箟鍔?(6,)
++ *   medium       : 褰撳墠浠嬭川锛堝喅瀹氭帹鍔涜竟鐣岋級
++ *   dt           : 鍛ㄦ湡闂撮殧 s
++ *   health       : 鍥涜矾宸茬煡鎺ㄥ姏鏁堣兘 [0,1]锛圢ULL 瑙嗕负鍏?1锛?+ *   air_fraction : 绌轰腑鎺堟潈锛?=瀹屽叏绌轰腑锛堝€捐浆鍥炰腑锛夛紝0=瀹屽叏姘翠腑
++ *   out          : 杈撳嚭鍒嗛厤缁撴灉
++ */
++void uw_allocate(uw_allocator_t *a, const float target[UW_NUM_WRENCH],
++                 uw_medium_t medium, float dt, const float health[UW_NUM_ROTORS],
++                 float air_fraction, uw_allocation_t *out);
+diff --git a/src/main/underwater/underwater_config.c b/src/main/underwater/underwater_config.c
+new file mode 100644
+index 0000000..cef0bf7
+--- /dev/null
++++ b/src/main/underwater/underwater_config.c
+@@ -0,0 +1,45 @@
++/*
++ * underwater_config.c 鈥斺€?榛樿鏁存満鍙傛暟涓庡弻濂楀鐩婄殑瀹為檯瀹氫箟
++ */
++#include "underwater_params.h"
++
++const uw_vehicle_t uw_vehicle_default = {
++    .positions = {
++        {0.30f, 0.30f, 0.0f},
++        {-0.30f, 0.30f, 0.0f},
++        {-0.30f, -0.30f, 0.0f},
++        {0.30f, -0.30f, 0.0f},
++    },
++    .spin_signs = {1.0f, -1.0f, 1.0f, -1.0f},
++    .tilt_directions = {
++        {1.0f, 0.0f, 0.0f},
++        {1.0f, 0.0f, 0.0f},
++        {1.0f, 0.0f, 0.0f},
++        {1.0f, 0.0f, 0.0f},
++    },
++    .thrust_max_air = 13.7f,
++    .thrust_max_water = 16.0f,
++    .reaction_torque_coeff = 0.02f,
++    .tilt_limit = 1.04719756f,     /* 60 deg */
++    .tilt_rate_limit = 1.57079633f,/* 90 deg/s */
++    .force_scale_n = 12.0f,
++    .torque_scale_nm = 1.0f,
++    .axis_priority = {1.0f, 0.0f, 3.0f, 3.0f, 3.0f, 1.5f},
++    .thrust_rate_n_s = 80.0f,
++    .smoothness = 0.002f,
++    .max_iterations = 5,
++};
++
++const uw_gain_table_t uw_default_gain_table = {
++    .air = {
++        .p = {45.0f, 45.0f, 45.0f},
++        .i = {30.0f, 30.0f, 45.0f},
++        .d = {20.0f, 20.0f, 0.0f},
++    },
++    .water = {
++        /* 姘翠腑闄勫姞璐ㄩ噺涓庨樆灏兼樉钁楋紝閲囩敤鏇翠綆鐨勯€熺巼鐜鐩?*/
++        .p = {30.0f, 30.0f, 35.0f},
++        .i = {25.0f, 25.0f, 35.0f},
++        .d = {10.0f, 10.0f, 0.0f},
++    },
++};
+diff --git a/src/main/underwater/underwater_mode.c b/src/main/underwater/underwater_mode.c
+new file mode 100644
+index 0000000..8b8e3ee
+--- /dev/null
++++ b/src/main/underwater/underwater_mode.c
+@@ -0,0 +1,111 @@
++/*
++ * underwater_mode.c 鈥斺€?浠嬭川妯″紡鐩戠潱鍣ㄥ疄鐜?+ */
++#include "underwater_mode.h"
++
++#include <math.h>
++#include <string.h>
++
++static float uw_blend(float air, float water, float af)
++{
++    return air * af + water * (1.0f - af);
++}
++
++void uw_supervisor_init(uw_supervisor_t *s, const uw_gain_table_t *table,
++                        float transition_rate, float max_tilt_rate)
++{
++    s->table = table;
++    s->transition_rate = transition_rate > 0.0f ? transition_rate : 1.0f;
++    s->max_tilt_rate = max_tilt_rate > 0.0f ? max_tilt_rate : 1.0f;
++    uw_supervisor_reset(s);
++}
++
++void uw_supervisor_reset(uw_supervisor_t *s)
++{
++    s->medium = UW_MEDIUM_AIR;
++    s->initialized = 0;
++    s->air_fraction = 1.0f;
++    s->tilt_hold_valid = 1;
++    s->last_ms = 0;
++    memset(s->tilt_hold, 0, sizeof(s->tilt_hold));
++    s->gains = s->table ? s->table->air : (uw_pid_gains_t){0};
++}
++
++int uw_supervisor_update(uw_supervisor_t *s, uw_medium_t commanded, uint32_t now_ms)
++{
++    float dt = 0.0f;
++    if (s->initialized && now_ms >= s->last_ms) {
++        dt = (float)(now_ms - s->last_ms) * 1e-3f;
++    }
++    s->last_ms = now_ms;
++    s->initialized = 1;
++
++    const int changed = (commanded != s->medium);
++    s->medium = commanded;
++
++    /* 绌轰腑鎺堟潈鎸夎繃娓￠€熺巼鍚戠洰鏍囷紙绌轰腑=1锛屾按涓?0锛夌嚎鎬ч€艰繎 */
++    const float target = (commanded == UW_MEDIUM_AIR) ? 1.0f : 0.0f;
++    const float max_delta = s->transition_rate * dt;
++    float delta = target - s->air_fraction;
++    if (delta > max_delta) {
++        delta = max_delta;
++    } else if (delta < -max_delta) {
++        delta = -max_delta;
++    }
++    s->air_fraction += delta;
++    if (s->air_fraction > 1.0f) {
++        s->air_fraction = 1.0f;
++    } else if (s->air_fraction < 0.0f) {
++        s->air_fraction = 0.0f;
++    }
++
++    /* 铻嶅悎鍙屽澧炵泭锛氫粙璐ㄥ垏鎹㈡椂杩炵画鍙樺寲锛岀瓑鏁堟棤鎵拌繃娓?*/
++    if (s->table) {
++        for (int i = 0; i < 3; ++i) {
++            s->gains.p[i] = uw_blend(s->table->air.p[i], s->table->water.p[i], s->air_fraction);
++            s->gains.i[i] = uw_blend(s->table->air.i[i], s->table->water.i[i], s->air_fraction);
++            s->gains.d[i] = uw_blend(s->table->air.d[i], s->table->water.d[i], s->air_fraction);
++        }
++    }
++    return changed;
++}
++
++float uw_supervisor_air_fraction(const uw_supervisor_t *s)
++{
++    return s->air_fraction;
++}
++
++int uw_supervisor_is_water(const uw_supervisor_t *s)
++{
++    return s->medium == UW_MEDIUM_WATER;
++}
++
++const uw_pid_gains_t *uw_supervisor_gains(const uw_supervisor_t *s)
++{
++    return &s->gains;
++}
++
++void uw_supervisor_slew_tilt(uw_supervisor_t *s, const float tilt_target[UW_NUM_ROTORS],
++                             float dt, float tilt_out[UW_NUM_ROTORS])
++{
++    if (dt <= 0.0f) {
++        dt = 1e-3f;
++    }
++    const float max_step = s->max_tilt_rate * dt;
++
++    if (!s->tilt_hold_valid) {
++        memcpy(s->tilt_hold, tilt_target, sizeof(s->tilt_hold));
++        s->tilt_hold_valid = 1;
++    }
++
++    for (int i = 0; i < UW_NUM_ROTORS; ++i) {
++        float delta = tilt_target[i] - s->tilt_hold[i];
++        if (delta > max_step) {
++            delta = max_step;
++        } else if (delta < -max_step) {
++            delta = -max_step;
++        }
++        s->tilt_hold[i] += delta;
++        tilt_out[i] = s->tilt_hold[i];
++    }
++}
+diff --git a/src/main/underwater/underwater_mode.h b/src/main/underwater/underwater_mode.h
+new file mode 100644
+index 0000000..d10bad3
+--- /dev/null
++++ b/src/main/underwater/underwater_mode.h
+@@ -0,0 +1,41 @@
++/*
++ * underwater_mode.h 鈥斺€?浠嬭川妯″紡鐩戠潱鍣紙鍙屽 PID + 鏃犳壈鍒囨崲 + 鍊捐浆闄愰€燂級
++ *
++ * 椋炴帶浠ラ仴鎺ч€氶亾鍒ゅ畾銆岀┖涓?/ 姘翠笅銆嶆ā鎬侊紱鏈ā鍧楄礋璐ｏ細
++ *   1. 缁存姢褰撳墠鐩爣浠嬭川骞惰緭鍑虹┖涓巿鏉?air_fraction锛?=绌轰腑锛?=姘翠腑锛夛紱
++ *   2. 鍦ㄤ粙璐ㄥ垏鎹㈡椂鎸夐€熺巼浜ゅ弶娣″叆鍙屽 PID 澧炵泭锛岄伩鍏嶆寚浠よ烦鍙橈紙bumpless锛夛紱
++ *   3. 瀵瑰€捐浆瑙掓寚浠ゅ仛閫熺巼闄愬埗锛屽苟淇濈暀涓婂懆鏈熺姸鎬佷互鏀寔鍒囨崲杩炵画鎬с€?+ */
++#pragma once
++
++#include <stdint.h>
++
++#include "underwater_params.h"
++
++typedef struct uw_supervisor_s {
++    const uw_gain_table_t *table;
++    uw_medium_t medium;
++    int initialized;
++    float air_fraction;   /* 1=瀹屽叏绌轰腑锛?=瀹屽叏姘翠腑 */
++    float transition_rate;/* 姣忕杩囨浮姣斾緥 */
++    float max_tilt_rate;  /* 鍊捐浆瑙掓寚浠ら檺閫?rad/s */
++    uw_pid_gains_t gains; /* 褰撳墠锛堣瀺鍚堝悗锛夊鐩?*/
++    float tilt_hold[UW_NUM_ROTORS];
++    int tilt_hold_valid;
++    uint32_t last_ms;
++} uw_supervisor_t;
++
++void uw_supervisor_init(uw_supervisor_t *s, const uw_gain_table_t *table,
++                        float transition_rate, float max_tilt_rate);
++void uw_supervisor_reset(uw_supervisor_t *s);
++
++/* 鎸夌洰鏍囦粙璐ㄦ帹杩涗竴涓帶鍒跺懆鏈燂紱杩斿洖 1 琛ㄧず鏈懆鏈熶粙璐ㄥ彂鐢熷彉鍖栥€?*/
++int uw_supervisor_update(uw_supervisor_t *s, uw_medium_t commanded, uint32_t now_ms);
++
++float uw_supervisor_air_fraction(const uw_supervisor_t *s);
++int uw_supervisor_is_water(const uw_supervisor_t *s);
++const uw_pid_gains_t *uw_supervisor_gains(const uw_supervisor_t *s);
++
++/* 瀵瑰洓璺€捐浆瑙掓寚浠ゅ仛閫熺巼闄愬埗锛岃緭鍑哄钩婊戜笖杩炵画鐨勮埖鏈虹洰鏍囥€?*/
++void uw_supervisor_slew_tilt(uw_supervisor_t *s, const float tilt_target[UW_NUM_ROTORS],
++                             float dt, float tilt_out[UW_NUM_ROTORS]);
+diff --git a/src/main/underwater/underwater_params.h b/src/main/underwater/underwater_params.h
+new file mode 100644
+index 0000000..3b7ac44
+--- /dev/null
++++ b/src/main/underwater/underwater_params.h
+@@ -0,0 +1,53 @@
++/*
++ * underwater_params.h 鈥斺€?姘翠笅杩愭帶妯℃€佺殑闆嗕腑鍙傛暟
++ *
++ * 鏈枃浠舵槸 INAV 浜屾寮€鍙戞ā鍧楃殑鍞竴鍙傛暟鍏ュ彛锛屾暟鍊间笌 control/configs 涓嬬殑
++ * 鍙傝€冩ā鍨嬩繚鎸佷竴鑷达紙鍗曚綅锛歮, kg, s, rad, N, N路m锛夈€傜姝㈠湪绠楁硶浠ｇ爜涓暎钀介瓟鏁般€?+ */
++#pragma once
++
++#define UW_NUM_ROTORS 4
++#define UW_NUM_ACTUATORS 8 /* [T1..T4, theta1..theta4] */
++#define UW_NUM_WRENCH 6    /* [Fx, Fy, Fz, Mx, My, Mz] */
++
++typedef enum uw_medium_e {
++    UW_MEDIUM_AIR = 0,
++    UW_MEDIUM_WATER = 1
++} uw_medium_t;
++
++typedef struct uw_vehicle_s {
++    float positions[UW_NUM_ROTORS][3];      /* 鎺ㄨ繘鍗曞厓鏈轰綋绯诲畨瑁呬綅缃?*/
++    float spin_signs[UW_NUM_ROTORS];        /* 鏃嬬考鑷浆鏂瑰悜 */
++    float tilt_directions[UW_NUM_ROTORS][3];/* 鍊捐浆鏃舵帹鍔涜秼鍚戞柟鍚戯紙宸插綊涓€鍖栵級 */
++    float thrust_max_air;                   /* 鍗曟〃绌轰腑鏈€澶ф帹鍔?N */
++    float thrust_max_water;                 /* 鍗曟〃姘翠腑鏈€澶ф帹鍔?N */
++    float reaction_torque_coeff;            /* 鍙嶆壄鐭╃郴鏁?k_Q */
++    float tilt_limit;                       /* 鍊捐浆瑙掑箙鍊间笂闄?rad */
++    float tilt_rate_limit;                  /* 鍊捐浆瑙掗€熺巼涓婇檺 rad/s */
++
++    float force_scale_n;                    /* 鍔涘綊涓€鍖栧昂搴?*/
++    float torque_scale_nm;                  /* 鍔涚煩褰掍竴鍖栧昂搴?*/
++    float axis_priority[UW_NUM_WRENCH];     /* 浠诲姟杞翠紭鍏堢骇鏉冮噸 */
++    float thrust_rate_n_s;                  /* 鎺ㄥ姏鍙樺寲鐜囦笂闄?N/s */
++    float smoothness;                       /* 鎸囦护骞虫粦姝ｅ垯鏉冮噸 */
++    int max_iterations;                     /* 閫愭绾挎€у寲杩唬涓婇檺 */
++} uw_vehicle_t;
++
++/* 涓?control/configs/vehicle_default.yaml + research.yaml 瀵归綈鐨勯粯璁ゆ暣鏈哄弬鏁般€?*/
++extern const uw_vehicle_t uw_vehicle_default;
++
++/* 鍙屽 PID 澧炵泭锛堝搴?INAV 绌轰腑 / 姘翠笅涓や釜 PID profile 妲戒綅锛夈€?+ * 鏁板€奸噰鐢?INAV 鍘熺敓閲忕翰锛圥/I/D 脳1000锛夛紝鐢辫ˉ涓佸啓鍏?pidProfile銆?*/
++typedef struct uw_pid_gains_s {
++    float p[3]; /* roll, pitch, yaw */
++    float i[3];
++    float d[3];
++} uw_pid_gains_t;
++
++typedef struct uw_gain_table_s {
++    uw_pid_gains_t air;
++    uw_pid_gains_t water;
++} uw_gain_table_t;
++
++/* 涓?firmware 鍐呴厤缃枃浠跺搴旂殑鍙屽澧炵泭鍒濆€硷紝浠嬭川鍒囨崲鏃舵棤鎵拌繃娓°€?*/
++extern const uw_gain_table_t uw_default_gain_table;

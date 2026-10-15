@@ -1,0 +1,20 @@
+mission:
+  initial_state: preflight
+  health_min: 0.55
+  battery_return_fraction: 0.22
+  max_depth_m: 0.5
+  survey_depth_m: 0.3
+  air_altitude_m: 2.0
+  surface_band_m: 0.05
+  obstacle_hold_m: 0.8
+  link_timeout_s: 1.5
+  sensor_timeout_s: 1.0
+  confirm_dwell_s: 0.8
+  hold_recover_s: 1.0
+  enter_timeout_s: 8.0
+  exit_timeout_s: 8.0
+  survey_timeout_s: 30.0
+  recovery_timeout_s: 10.0
+  complete_altitude_m: 1.5
+  survey_speed_m_s: 0.25
+  return_speed_m_s: 0.15

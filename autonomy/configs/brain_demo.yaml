@@ -1,0 +1,23 @@
+seed: 319
+dt_s: 0.2
+max_steps: 150
+initial_state: survey
+start_pose_xy_yaw: [1.0, 1.0, 0.0]
+goals:
+  survey: [7.5, 2.5]
+  return: [1.0, 1.0]
+image_size_wh: [320, 240]
+background_mean: 100.0
+background_std: 3.0
+marker_interval_s: [5.0, 9.0]
+marker_xywh: [110, 80, 70, 70]
+marker_color_bgr: [255, 0, 0]
+marker_motion_amplitude_px: 5.0
+exit_start_s: 7.5
+exit_duration_s: 1.0
+snapshot_indices: [29, 31]
+calibration:
+  background_mean: 0.0
+  background_std: 0.8
+  target_mean: 2.4
+  target_std: 0.8

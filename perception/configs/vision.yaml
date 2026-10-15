@@ -1,0 +1,29 @@
+detector:
+  # 默认接入本地 YOLO：backend 可选 onnxruntime / opencv / ultralytics。
+  # 未放置本地权重时自动回退到颜色基线，便于无权重环境运行。
+  backend: onnxruntime
+  weights: ../../models/target_yolo.onnx
+  class_names: [target]
+  output_format: raw_v8
+  confidence: 0.25
+  iou: 0.45
+  image_size: 320
+  max_detections: 100
+  allowed_classes: []
+  hsv_lower: [100, 80, 50]
+  hsv_upper: [130, 255, 255]
+  min_area_px: 200
+tracking:
+  min_hits: 3
+  max_age_s: 0.6
+  iou_threshold: 0.15
+  center_gate_px: 80.0
+  confidence_alpha: 0.4
+quality:
+  blur_reference: 60.0
+  brightness_floor: 20.0
+  brightness_ceiling: 235.0
+evidence:
+  target_labels: [target]
+  score_scale: 3.0
+  horizontal_fov_deg: 65.0

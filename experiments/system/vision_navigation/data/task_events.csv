@@ -1,0 +1,5 @@
+﻿timestamp_s,from,to,reason
+5.800000000000001,survey,confirm,发现候选目标
+6.800000000000001,confirm,exit_water,目标持续确认，记录并返航
+7.800000000000001,exit_water,return,离开水面
+18.2,return,complete,返回指定回收位置

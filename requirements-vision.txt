@@ -1,0 +1,4 @@
+-r requirements.txt
+opencv-python-headless>=4.8,<5
+onnxruntime>=1.17,<2
+# 选择 .pt 后端时另外安装 ultralytics；默认 ONNX/颜色链不需要 PyTorch。

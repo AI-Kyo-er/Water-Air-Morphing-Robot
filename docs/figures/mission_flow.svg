@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="390" viewBox="0 0 1400 390">
+<rect width="1400" height="390" fill="#f4f7fa"/>
+<g font-family="Microsoft YaHei, sans-serif">
+<text x="60" y="65" font-size="30" fill="#173342" font-weight="700">由观测触发任务，由状态约束动作</text>
+<rect x="60" y="115" width="190" height="105" rx="15" fill="white" stroke="#d6e0e5"/>
+<text x="155" y="157" text-anchor="middle" font-size="22" fill="#173342">起航检查</text>
+<text x="155" y="191" text-anchor="middle" font-size="16" fill="#637782">系统就绪</text>
+<text x="258" y="177" font-size="25" fill="#1a9c91">→</text>
+<rect x="275" y="115" width="190" height="105" rx="15" fill="white" stroke="#d6e0e5"/>
+<text x="370" y="157" text-anchor="middle" font-size="22" fill="#173342">空中抵达</text>
+<text x="370" y="191" text-anchor="middle" font-size="16" fill="#637782">到达巡检区域</text>
+<text x="473" y="177" font-size="25" fill="#1a9c91">→</text>
+<rect x="490" y="115" width="190" height="105" rx="15" fill="white" stroke="#d6e0e5"/>
+<text x="585" y="157" text-anchor="middle" font-size="22" fill="#173342">受控入水</text>
+<text x="585" y="191" text-anchor="middle" font-size="16" fill="#637782">到达目标深度</text>
+<text x="688" y="177" font-size="25" fill="#1a9c91">→</text>
+<rect x="705" y="115" width="190" height="105" rx="15" fill="white" stroke="#d6e0e5"/>
+<text x="800" y="157" text-anchor="middle" font-size="22" fill="#173342">水下巡检</text>
+<text x="800" y="191" text-anchor="middle" font-size="16" fill="#637782">融合目标证据</text>
+<text x="903" y="177" font-size="25" fill="#1a9c91">→</text>
+<rect x="920" y="115" width="190" height="105" rx="15" fill="white" stroke="#d6e0e5"/>
+<text x="1015" y="157" text-anchor="middle" font-size="22" fill="#173342">目标确认</text>
+<text x="1015" y="191" text-anchor="middle" font-size="16" fill="#637782">持续证据判定</text>
+<text x="1118" y="177" font-size="25" fill="#1a9c91">→</text>
+<rect x="1135" y="115" width="190" height="105" rx="15" fill="white" stroke="#d6e0e5"/>
+<text x="1230" y="157" text-anchor="middle" font-size="22" fill="#173342">出水返航</text>
+<text x="1230" y="191" text-anchor="middle" font-size="16" fill="#637782">返回回收位置</text>
+<rect x="60" y="265" width="1265" height="66" rx="15" fill="#e5f2ef"/>
+<text x="90" y="306" font-size="19" fill="#1b756e">异常分支：感知退化 / 障碍接近 → 保持与复核　｜　低电量 → 提前返航　｜　失联 / 超深 / 效能不足 → 恢复请求</text>
+</g></svg>

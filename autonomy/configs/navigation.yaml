@@ -1,0 +1,44 @@
+grid:
+  width_cells: 80
+  height_cells: 60
+  resolution_m: 0.15
+  origin_xy_m: [0.0, 0.0]
+  unknown_is_obstacle: true
+  occupied_threshold: 0.5
+  free_log_odds: -0.5
+  hit_log_odds: 0.9
+  log_odds_limit: 4.0
+  robot_radius_m: 0.32
+planner:
+  clearance_weight: 1.5
+  clearance_decay_m: 0.7
+  max_expansions: 20000
+follower:
+  max_speed_m_s: 0.35
+  max_yaw_rate_rad_s: 0.9
+  acceleration_m_s2: 0.3
+  yaw_acceleration_rad_s2: 1.8
+  horizon_s: 1.5
+  rollout_dt_s: 0.1
+  speed_samples: 7
+  yaw_samples: 15
+  goal_weight: 3.0
+  heading_weight: 0.4
+  clearance_weight: 0.3
+  speed_weight: 0.2
+navigator:
+  lookahead_m: 0.9
+  goal_tolerance_m: 0.25
+  replan_interval_s: 2.0
+demo:
+  seed: 319
+  dt_s: 0.2
+  max_steps: 700
+  start_xy_m: [1.0, 1.0]
+  goal_xy_m: [10.5, 7.4]
+  obstacles_m:
+    - [3.0, 0.0, 3.8, 5.6]
+    - [6.0, 3.4, 6.8, 9.0]
+  dynamic_obstacle_s: 18.0
+  dynamic_rectangle_m: [4.3, 5.8, 4.8, 6.5]
+  sealed_rectangle_m: [4.3, 5.8, 5.4, 6.5]

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="800" viewBox="0 0 1400 800">
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10" fill="#1a9c91"/></marker></defs>
+<rect width="1400" height="800" fill="#f4f7fa"/>
+<g font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif">
+<text x="70" y="80" fill="#173342" font-size="40" font-weight="700">潜空智航 · 分层智能系统</text>
+<text x="70" y="125" fill="#637782" font-size="22">以已有双速倾转原型为载体，连接感知、决策、控制与执行</text>
+<rect x="70" y="165" width="1260" height="55" rx="12" fill="#173342"/>
+<text x="700" y="201" text-anchor="middle" fill="#ffffff" font-size="22">任务目标：空中抵达 → 入水巡检 → 候选目标确认 → 出水返航</text>
+<rect x="70" y="260" width="270" height="310" rx="18" fill="white" stroke="#d6e0e5"/>
+<rect x="70" y="260" width="270" height="8" rx="4" fill="#1a9c91"/>
+<text x="92" y="318" fill="#173342" font-size="28" font-weight="700">01  感知</text>
+<text x="92" y="359" fill="#1a8c83" font-size="15">多源观测与质量评估</text>
+<text x="92" y="410" fill="#49616e" font-size="16">水听器 / 磁力计 → DAQ122</text>
+<text x="92" y="448" fill="#49616e" font-size="16">摄像头 / 声呐 → USB</text>
+<text x="92" y="486" fill="#49616e" font-size="16">深度与温度 → ESP32</text>
+<text x="92" y="524" fill="#49616e" font-size="16">时间戳 · 质量 · 可用性</text>
+<rect x="400" y="260" width="270" height="310" rx="18" fill="white" stroke="#d6e0e5"/>
+<rect x="400" y="260" width="270" height="8" rx="4" fill="#1a9c91"/>
+<text x="422" y="318" fill="#173342" font-size="28" font-weight="700">02  大脑</text>
+<text x="422" y="359" fill="#1a8c83" font-size="15">树莓派 · 可信感知与任务决策</text>
+<text x="422" y="410" fill="#49616e" font-size="16">质量与新鲜度加权融合</text>
+<text x="422" y="448" fill="#49616e" font-size="16">目标确认 · 巡检 · 返航</text>
+<text x="422" y="486" fill="#49616e" font-size="16">事件驱动任务状态机</text>
+<text x="422" y="524" fill="#49616e" font-size="16">输出：模式 / 速度 / 深度目标</text>
+<rect x="730" y="260" width="270" height="310" rx="18" fill="white" stroke="#d6e0e5"/>
+<rect x="730" y="260" width="270" height="8" rx="4" fill="#1a9c91"/>
+<text x="752" y="318" fill="#173342" font-size="28" font-weight="700">03  小脑</text>
+<text x="752" y="359" fill="#1a8c83" font-size="15">飞控 · 运动控制与约束分配</text>
+<text x="752" y="410" fill="#49616e" font-size="16">位置 / 深度 / 姿态控制</text>
+<text x="752" y="448" fill="#49616e" font-size="16">独立倾转与差动推力协调</text>
+<text x="752" y="486" fill="#49616e" font-size="16">推力 · 舵角 · 变化率约束</text>
+<text x="752" y="524" fill="#49616e" font-size="16">输出：4 推力 + 4 倾转角</text>
+<rect x="1060" y="260" width="270" height="310" rx="18" fill="white" stroke="#d6e0e5"/>
+<rect x="1060" y="260" width="270" height="8" rx="4" fill="#1a9c91"/>
+<text x="1082" y="318" fill="#173342" font-size="28" font-weight="700">04  执行</text>
+<text x="1082" y="359" fill="#1a8c83" font-size="15">双速推进 · 电机 · 倾转舵机</text>
+<text x="1082" y="410" fill="#49616e" font-size="16">空气：直驱工作模式</text>
+<text x="1082" y="448" fill="#49616e" font-size="16">水下：减速增扭工作模式</text>
+<text x="1082" y="486" fill="#49616e" font-size="16">ESP32 倾转指令整形</text>
+<text x="1082" y="524" fill="#49616e" font-size="16">状态反馈 · 指令限幅 / 限速</text>
+<path d="M348,415 H387" stroke="#1a9c91" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M678,415 H717" stroke="#1a9c91" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M1008,415 H1047" stroke="#1a9c91" stroke-width="3" marker-end="url(#arrow)"/>
+<path d="M1195,585 V640 H205 V590" fill="none" stroke="#6f8693" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#arrow)"/>
+<rect x="445" y="616" width="510" height="48" rx="10" fill="#f4f7fa"/>
+<text x="700" y="647" text-anchor="middle" fill="#49616e" font-size="19">反馈：平台状态 · 介质状态 · 感知质量 · 执行器效能</text>
+<text x="70" y="726" fill="#637782" font-size="17">实现路径：Python 算法与接口 → 日志回放与对比 → 飞控集成与实机标定</text>
+<text x="70" y="762" fill="#637782" font-size="15">DAQ122 负责声 / 磁模拟量；相机、声呐及深度计按各自接口接入。飞控集成状态见技术文档。</text>
+</g></svg>
